@@ -58,16 +58,21 @@ class NeighborInfo(object):
 neighbor_information = {}
 # Leave the server socket as global variable.
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.bind(('0.0.0.0', 0))
+port = server.getsockname()[1]
 
 # Leave broadcaster as a global variable.
 broadcaster = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # Setup the UDP socket
+broadcaster.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+broadcaster.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
 
 def send_broadcast_thread():
     node_uuid = get_node_uuid()
     while True:
         # TODO: write logic for sending broadcasts.
+        broadcaster.sendto(f'{node_uuid} ON {port}'.encode('ascii'), ('0.0.0.0', get_broadcast_port()))
         time.sleep(1)   # Leave as is.
 
 
@@ -112,7 +117,9 @@ def daemon_thread_builder(target, args=()) -> threading.Thread:
 
 
 def entrypoint():
-    pass
+    broadcast_thread = daemon_thread_builder(send_broadcast_thread)
+    broadcast_thread.start()
+    broadcast_thread.join()
 
 ############################################
 ############################################
