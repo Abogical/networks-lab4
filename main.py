@@ -45,6 +45,7 @@ class NeighborInfo(object):
     def __init__(self, delay, last_timestamp, broadcast_count, ip=None, tcp_port=None):
         # Ip and port are optional, if you want to store them.
         self.delay = delay
+        self.last_timestamp = last_timestamp
         self.broadcast_count = broadcast_count
         self.ip = ip
         self.tcp_port = tcp_port
