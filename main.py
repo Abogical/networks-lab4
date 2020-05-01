@@ -1,10 +1,7 @@
-import sys
-import os
 import threading
 import socket
 import time
 import uuid
-import struct
 from datetime import datetime, timezone
 import re
 # https://bluesock.org/~willkg/dev/ansi.html
@@ -51,11 +48,9 @@ class NeighborInfo(object):
         self.tcp_port = tcp_port
 
 
-
 ############################################
 #######  Y  O  U  R     C  O  D  E  ########
 ############################################
-
 
 # Don't change any variable's name.
 # Use this hashmap to store the information of your neighbor nodes.
@@ -99,9 +94,11 @@ def receive_broadcast_thread():
             continue
         print_blue(f"RECV: {data} FROM: {ip}:{port}")
         if broadcast_match:
-            if uuid not in neighbor_information or neighbor_information[uuid].broadcast_count == 9:
+            if (uuid not in neighbor_information or
+                    neighbor_information[uuid].broadcast_count == 9):
                 daemon_thread_builder(
-                    exchange_timestamps_thread, (uuid, ip, int(broadcast_match.group(2)))).start()
+                    exchange_timestamps_thread, (uuid, ip, int(
+                        broadcast_match.group(2)))).start()
             else:
                 neighbor_information[uuid].broadcast_count += 1
                 neighbor_information[uuid].last_timestamp = timestamp()
@@ -109,7 +106,7 @@ def receive_broadcast_thread():
 
 def timestamp():
     # Timestamps are in microseconds, rounded to an integer.
-    return int(round(datetime.now(timezone.utc).timestamp()*10e6))
+    return int(round(datetime.now(timezone.utc).timestamp() * 10e6))
 
 
 def tcp_server_thread():
@@ -158,7 +155,7 @@ def exchange_timestamps_thread(other_uuid: str, other_ip: str, other_tcp_port: i
                 uuid_error(other_uuid, f"{other_uuid} RECV ERROR, REMOVED")
             else:
                 other_timestamp = int(rec_msg[0].decode('ascii'))
-                delay = other_timestamp-my_timestamp
+                delay = other_timestamp - my_timestamp
                 neighbor_information[other_uuid] = NeighborInfo(
                     delay,
                     my_timestamp,
@@ -185,8 +182,12 @@ def entrypoint():
     while True:
         # Delete any lost nodes
         time.sleep(1)
-        min_timestamp = datetime.now(timezone.utc).timestamp()*10e6 - 10e7
-        for key in [key for key, val in filter(lambda keyval: keyval[1].last_timestamp < min_timestamp, neighbor_information.items())]:
+        min_timestamp = datetime.now(timezone.utc).timestamp() * 10e6 - 10e7
+        for key in [
+            key for key,
+            val in filter(
+                lambda keyval: keyval[1].last_timestamp < min_timestamp,
+                neighbor_information.items())]:
             uuid_error(key, f"{key} TIMED OUT, REMOVED")
 
 ############################################
