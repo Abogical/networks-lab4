@@ -49,6 +49,7 @@ class NeighborInfo(object):
         self.broadcast_count = broadcast_count
         self.ip = ip
         self.tcp_port = tcp_port
+    
 
 
 ############################################
@@ -61,15 +62,17 @@ class NeighborInfo(object):
 neighbor_information = {}
 # Leave the server socket as global variable.
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind(('0.0.0.0', 0))
+server.bind(("0.0.0.0", 0))
+server.listen(10)
 port = server.getsockname()[1]
 
 # Leave broadcaster as a global variable.
 broadcaster = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # Setup the UDP socket
+#broadcaster.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 broadcaster.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
 broadcaster.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-broadcaster.bind(('', get_broadcast_port()))
+broadcaster.bind(("0.0.0.0", get_broadcast_port()))
 
 broadcast_msg_re = re.compile(r'([\da-f]{8}) ON (\d{1,5})')
 
@@ -78,7 +81,8 @@ def send_broadcast_thread():
     node_uuid = get_node_uuid()
     while True:
         # TODO: write logic for sending broadcasts.
-        broadcaster.sendto(f'{node_uuid} ON {port}'.encode('ascii'), ('0.0.0.0', get_broadcast_port()))
+        broadcaster.sendto(f'{node_uuid} ON {port}'.encode(
+            'ascii'), ("255.255.255.255", get_broadcast_port()))
         time.sleep(1)   # Leave as is.
 
 
@@ -90,15 +94,19 @@ def receive_broadcast_thread():
     """
     while True:
         data, (ip, port) = broadcaster.recvfrom(4096)
-        print_blue(f"RECV: {data} FROM: {ip}:{port}")
         broadcast_match = broadcast_msg_re.match(data.decode('ascii'))
+        uuid = broadcast_match.group(1)
+        if uuid == get_node_uuid():
+            continue
+        print_blue(f"RECV: {data} FROM: {ip}:{port}")
         print(broadcast_match, data.decode('ascii'))
         if broadcast_match:
-            uuid = broadcast_match.group(1)
             if uuid not in neighbor_information or neighbor_information[uuid].broadcast_count == 9:
-                daemon_thread_builder(exchange_timestamps_thread, (uuid, ip, int(broadcast_match.group(2)))).start()
+                daemon_thread_builder(
+                    exchange_timestamps_thread, (uuid, ip, int(broadcast_match.group(2)))).start()
             else:
                 neighbor_information[uuid].broadcast_count += 1
+                neighbor_information[uuid].last_timestamp = timestamp()
 
 
 def timestamp():
@@ -110,7 +118,9 @@ def tcp_server_thread():
     Accept connections from other nodes and send them
     this node's timestamp once they connect.
     """
-    pass
+    while True:
+        client_socket, address = server.accept()
+        client_socket.send(hex(timestamp())[2:].encode('ascii'))
 
 
 def exchange_timestamps_thread(other_uuid: str, other_ip: str, other_tcp_port: int):
@@ -120,13 +130,18 @@ def exchange_timestamps_thread(other_uuid: str, other_ip: str, other_tcp_port: i
 
     Then update the neighbor_info map using other node's UUID.
     """
-    my_timestamp = timestamp()
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     print_yellow(f"ATTEMPTING TO CONNECT TO {other_uuid}")
     client.connect((other_ip, other_tcp_port))
-    client.send(hex(my_timestamp)[2:])
-    other_timestamp = int(server.recvfrom(1024)[0], base=16)
-    neighbor_information[other_uuid] = NeighborInfo(other_timestamp-my_timestamp, other_timestamp, 0 if other_uuid in neighbor_information else 1, other_ip, other_tcp_port)
+    # client.send(hex(my_timestamp)[2:])
+    other_timestamp = int(client.recvfrom(1024)[0].decode('ascii'), base=16)
+    my_timestamp = timestamp()
+    neighbor_information[other_uuid] = NeighborInfo(
+        my_timestamp-other_timestamp,
+        my_timestamp,
+        0 if other_uuid in neighbor_information else 1,
+        other_ip,
+        other_tcp_port)
 
 
 def daemon_thread_builder(target, args=()) -> threading.Thread:
@@ -141,12 +156,17 @@ def daemon_thread_builder(target, args=()) -> threading.Thread:
 def entrypoint():
     daemon_thread_builder(receive_broadcast_thread).start()
     daemon_thread_builder(send_broadcast_thread).start()
+    daemon_thread_builder(tcp_server_thread).start()
     while True:
         # Delete any lost nodes
         time.sleep(1)
         min_timestamp = timestamp() - 10
-        for key in filter(lambda key: neighbor_information[key].last_timestamp < min_timestamp, neighbor_information.keys()):
+        to_delete = []
+        for key in filter(lambda key: neighbor_information[key].last_timestamp < min_timestamp+neighbor_information[key].broadcast_count, neighbor_information.keys()):
+            to_delete.append(key)
+        for key in to_delete:
             del neighbor_information[key]
+            print_red(f"DELETED {key}, Dict length {len(neighbor_information)}")
 
 ############################################
 ############################################
