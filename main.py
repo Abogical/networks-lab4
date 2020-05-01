@@ -49,7 +49,7 @@ class NeighborInfo(object):
         self.broadcast_count = broadcast_count
         self.ip = ip
         self.tcp_port = tcp_port
-    
+
 
 
 ############################################
@@ -69,10 +69,9 @@ port = server.getsockname()[1]
 # Leave broadcaster as a global variable.
 broadcaster = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # Setup the UDP socket
-#broadcaster.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 broadcaster.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
 broadcaster.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-broadcaster.bind(("0.0.0.0", get_broadcast_port()))
+broadcaster.bind(("127.0.0.255", get_broadcast_port()))
 
 broadcast_msg_re = re.compile(r'([\da-f]{8}) ON (\d{1,5})')
 
@@ -82,7 +81,7 @@ def send_broadcast_thread():
     while True:
         # TODO: write logic for sending broadcasts.
         broadcaster.sendto(f'{node_uuid} ON {port}'.encode(
-            'ascii'), ("255.255.255.255", get_broadcast_port()))
+            'ascii'), ("127.0.0.255", get_broadcast_port()))
         time.sleep(1)   # Leave as is.
 
 
@@ -99,7 +98,6 @@ def receive_broadcast_thread():
         if uuid == get_node_uuid():
             continue
         print_blue(f"RECV: {data} FROM: {ip}:{port}")
-        print(broadcast_match, data.decode('ascii'))
         if broadcast_match:
             if uuid not in neighbor_information or neighbor_information[uuid].broadcast_count == 9:
                 daemon_thread_builder(
@@ -110,7 +108,8 @@ def receive_broadcast_thread():
 
 
 def timestamp():
-    return round(datetime.now(timezone.utc).timestamp())
+    # Timestamps are in microseconds, rounded to an integer.
+    return int(round(datetime.now(timezone.utc).timestamp()*10e6))
 
 
 def tcp_server_thread():
@@ -120,7 +119,17 @@ def tcp_server_thread():
     """
     while True:
         client_socket, address = server.accept()
-        client_socket.send(hex(timestamp())[2:].encode('ascii'))
+        client_socket.send(str(timestamp()).encode('ascii'))
+        print_green(f"ACCEPTED CONNECTION FROM {address}")
+
+
+def uuid_error(uuid, msg):
+    # Catches the case where multiple threads attempt to delete the same uuid
+    try:
+        del neighbor_information[uuid]
+    except KeyError:
+        pass
+    print_red(msg)
 
 
 def exchange_timestamps_thread(other_uuid: str, other_ip: str, other_tcp_port: int):
@@ -132,16 +141,32 @@ def exchange_timestamps_thread(other_uuid: str, other_ip: str, other_tcp_port: i
     """
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     print_yellow(f"ATTEMPTING TO CONNECT TO {other_uuid}")
-    client.connect((other_ip, other_tcp_port))
-    # client.send(hex(my_timestamp)[2:])
-    other_timestamp = int(client.recvfrom(1024)[0].decode('ascii'), base=16)
-    my_timestamp = timestamp()
-    neighbor_information[other_uuid] = NeighborInfo(
-        my_timestamp-other_timestamp,
-        my_timestamp,
-        0 if other_uuid in neighbor_information else 1,
-        other_ip,
-        other_tcp_port)
+    try:
+        client.connect((other_ip, other_tcp_port))
+    except ConnectionRefusedError:
+        uuid_error(other_uuid, f"{other_uuid} CONNECTION REFUSED, REMOVED")
+    else:
+        my_timestamp = timestamp()
+        try:
+            client.send(str(my_timestamp).encode('ascii'))
+        except ConnectionError:
+            uuid_error(other_uuid, f"{other_uuid} SEND ERROR, REMOVED")
+        else:
+            try:
+                rec_msg = client.recvfrom(1024)
+            except ConnectionError:
+                uuid_error(other_uuid, f"{other_uuid} RECV ERROR, REMOVED")
+            else:
+                other_timestamp = int(rec_msg[0].decode('ascii'))
+                delay = other_timestamp-my_timestamp
+                neighbor_information[other_uuid] = NeighborInfo(
+                    delay,
+                    my_timestamp,
+                    0 if other_uuid in neighbor_information else 1,
+                    other_ip,
+                    other_tcp_port
+                )
+                print_blue(f"{other_uuid} Delay: {delay}µs")
 
 
 def daemon_thread_builder(target, args=()) -> threading.Thread:
@@ -155,18 +180,14 @@ def daemon_thread_builder(target, args=()) -> threading.Thread:
 
 def entrypoint():
     daemon_thread_builder(receive_broadcast_thread).start()
-    daemon_thread_builder(send_broadcast_thread).start()
     daemon_thread_builder(tcp_server_thread).start()
+    daemon_thread_builder(send_broadcast_thread).start()
     while True:
         # Delete any lost nodes
         time.sleep(1)
-        min_timestamp = timestamp() - 10
-        to_delete = []
-        for key in filter(lambda key: neighbor_information[key].last_timestamp < min_timestamp+neighbor_information[key].broadcast_count, neighbor_information.keys()):
-            to_delete.append(key)
-        for key in to_delete:
-            del neighbor_information[key]
-            print_red(f"DELETED {key}, Dict length {len(neighbor_information)}")
+        min_timestamp = datetime.now(timezone.utc).timestamp()*10e6 - 10e7
+        for key in [key for key, val in filter(lambda keyval: keyval[1].last_timestamp < min_timestamp, neighbor_information.items())]:
+            uuid_error(key, f"{key} TIMED OUT, REMOVED")
 
 ############################################
 ############################################
