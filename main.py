@@ -71,7 +71,7 @@ broadcaster = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # Setup the UDP socket
 broadcaster.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
 broadcaster.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-broadcaster.bind(("127.0.0.255", get_broadcast_port()))
+broadcaster.bind(("<broadcast>", get_broadcast_port()))
 
 broadcast_msg_re = re.compile(r'([\da-f]{8}) ON (\d{1,5})')
 
@@ -81,7 +81,7 @@ def send_broadcast_thread():
     while True:
         # TODO: write logic for sending broadcasts.
         broadcaster.sendto(f'{node_uuid} ON {port}'.encode(
-            'ascii'), ("127.0.0.255", get_broadcast_port()))
+            'ascii'), ("<broadcast>", get_broadcast_port()))
         time.sleep(1)   # Leave as is.
 
 
